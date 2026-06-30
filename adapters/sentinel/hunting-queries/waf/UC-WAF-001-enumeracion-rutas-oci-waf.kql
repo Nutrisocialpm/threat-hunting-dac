@@ -1,0 +1,143 @@
+//TEST_TH-STC-AJO-OCI-ENUMERACIÓN DE RUTAS 
+let Lookback = 1h;//cambiar para creacion de alerta
+let Window = 15m;
+let MinUniquePaths = 3; //cantidad de path para el umbral
+let MinSuspiciousUniquePaths = 2; //cantidad de  sospechas minimas del path
+OCI_LogsV2_CL
+| where TimeGenerated >= ago(Lookback)
+// 1. Filtrar eventos WAF de OCI Load Balancer
+| extend 
+    EventType_1 = tostring(column_ifexists("EventType", "")),
+    EventType_2 = tostring(column_ifexists("type_s", "")),
+    EventType_3 = tostring(column_ifexists("type", ""))
+| extend EventType = case(
+    isnotempty(EventType_1), EventType_1,
+    isnotempty(EventType_2), EventType_2,
+    EventType_3
+)
+// | where EventType =~ "com.oraclecloud.loadbalancer.waf"
+// 2. Parseo JSON principal
+| extend 
+    Data = parse_json(tostring(column_ifexists("data", "{}"))),
+    Oracle = parse_json(tostring(column_ifexists("oracle", "{}")))
+// 3. Extracción de campos relevantes
+| extend 
+    ClientIPRaw = tostring(Data.clientAddr),
+    HostRaw = tostring(Data.host),
+    PathRaw = tostring(Data.request.path),
+    Method = tostring(Data.request.method),
+    UserAgent = tostring(Data.request.agent),
+    Country = tostring(Data.countryCode),
+    ListenerPort = tostring(Data.listenerPort),
+    WAFAction = tolower(tostring(Data.action)),
+    StatusCode = toint(Data.response.code),
+    BackendStatusCode = toint(Data.backendStatusCode),
+    ResponseProvider = tolower(tostring(Data.responseProvider)),
+    WAFMatchedRule = tostring(Data.requestProtection.matchedRules),
+    WAFMatchedRuleId = tostring(Data.requestProtection.matchedIds),
+    WAFResourceId = tostring(Oracle.resourceid),
+    WAFLogId = tostring(Oracle.logid),
+    WAFLogGroupId = tostring(Oracle.loggroupid)
+// 4. Normalización
+| extend 
+    ClientIP = extract(@"^([0-9]{1,3}(?:\.[0-9]{1,3}){3})", 1, ClientIPRaw),
+    Host = tolower(trim(@"[ \t\r\n]+", HostRaw)),
+    Path = tolower(tostring(split(PathRaw, "?")[0]))
+// 5. Lógica del caso de uso
+| where WAFAction == "allow"
+| where StatusCode in (400, 401, 403, 404, 405)//documentar las fuentes de status si provienen del servidor o del waf
+| where isempty(ResponseProvider) or ResponseProvider !contains "waf"
+| where isnotempty(ClientIP)
+| where ipv4_is_private(ClientIP) == false
+| where isnotempty(Host) and Host != "default"
+| where isnotempty(Path)
+// 6. Clasificación de rutas
+| extend TipoRuta = case(
+    Path contains ".env" or Path contains ".git" or Path contains ".bak" or Path contains ".old" or Path contains "backup" or Path contains "config",
+        "Archivos sensibles o configuración",
+    Path contains "ords" or Path contains "apex" or Path contains "owa",
+        "Componentes Oracle expuestos",
+    Path contains "admin" or Path contains "login" or Path contains "console" or Path contains "manager",
+        "Login o panel administrativo",
+    Path contains "swagger" or Path contains "openapi" or Path contains "api-docs" or Path contains "graphql",
+        "Documentación o API expuesta",
+    Path contains "confluence" or Path contains "joomla" or Path contains "hnap" or Path contains "dana-cached",
+        "Fingerprinting de tecnología",
+    Path contains "nmaplowercheck" or Path contains "nice%20ports" or Path contains "trinity.txt",
+        "Scanner genérico",
+    Path contains "/api/" or Path startswith "/api",
+        "Enumeración de API",
+    Path contains "health" or Path contains "status" or Path contains "debug",
+        "Endpoint de diagnóstico",
+    "Otro probing"
+)
+| extend EsRutaSospechosa = TipoRuta != "Otro probing"
+// 7. Agregación
+| summarize 
+    Solicitudes = count(),
+    EndpointsUnicos = dcount(Path),
+    SolicitudesRutasSospechosas = countif(EsRutaSospechosa),
+    RutasSospechosasUnicas = dcountif(Path, EsRutaSospechosa),
+    CodigosHTTP = make_set(StatusCode, 10),
+    CodigosBackend = make_set(BackendStatusCode, 10),
+    MetodosHTTP = make_set(Method, 10),
+    Paises = make_set(Country, 10),
+    UserAgents = make_set(UserAgent, 10),
+    ListenerPorts = make_set(ListenerPort, 10),
+    TiposRuta = make_set(TipoRuta, 10),
+    EjemplosEndpoints = make_set(PathRaw, 30),
+    WAFResourceIds = make_set(WAFResourceId, 10),
+    WAFLogIds = make_set(WAFLogId, 10),
+    WAFLogGroupIds = make_set(WAFLogGroupId, 10),
+    PrimeraVez = min(TimeGenerated),
+    UltimaVez = max(TimeGenerated)
+by ClientIP, Host, bin(TimeGenerated, Window)
+// 8. Umbrales
+| where EndpointsUnicos >= MinUniquePaths
+   or RutasSospechosasUnicas >= MinSuspiciousUniquePaths
+// 9. Enriquecimiento para alerta
+| extend 
+    AlertName = strcat("OCI WAF - Reconocimiento permitido con rechazo backend desde ", ClientIP),
+    AlertSeverity = "Medium",
+    Tactic = "Reconnaissance",
+    Technique = "T1595",
+    SrcIp = ClientIP,
+    DstHost = Host,
+    Resumen = strcat(
+        "IP ", ClientIP,
+        " realizó probing sobre ", Host,
+        ". WAF permitió tráfico pero backend rechazó. ",
+        "Req=", Solicitudes,
+        "; Endpoints=", EndpointsUnicos,
+        "; Rutas sospechosas=", RutasSospechosasUnicas,
+        "; HTTP=", tostring(CodigosHTTP)
+    )
+// 10. Output final
+| project 
+    TimeGenerated,
+    AlertName,
+    AlertSeverity,
+    Tactic,
+    Technique,
+    Resumen,
+    SrcIp,
+    DstHost,
+    Host,
+    Solicitudes,
+    EndpointsUnicos,
+    SolicitudesRutasSospechosas,
+    RutasSospechosasUnicas,
+    CodigosHTTP,
+    CodigosBackend,
+    MetodosHTTP,
+    Paises,
+    UserAgents,
+    ListenerPorts,
+    TiposRuta,
+    EjemplosEndpoints,
+    WAFResourceIds,
+    WAFLogIds,
+    WAFLogGroupIds,
+    PrimeraVez,
+    UltimaVez
+| order by RutasSospechosasUnicas desc, EndpointsUnicos desc, Solicitudes desc

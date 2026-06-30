@@ -1,0 +1,54 @@
+id: UC-WAF-001
+name: Enumeracion de rutas en OCI WAF
+status: hunting-validado
+version: 1.0.0
+owner: Threat Hunting
+author: Alexa
+created: 2026-06-29
+last_review: 2026-06-29
+
+category: WAF
+
+platforms:
+  - Microsoft Sentinel
+
+technologies:
+  - OCI WAF
+
+languages:
+  - KQL
+  - Sigma
+
+data_sources:
+  - OCI_LogsV2_CL
+
+mappings:
+  mitre_attack:
+    tactic: Reconnaissance
+    technique_id: T1595
+    technique_name: Active Scanning
+
+  owasp:
+    wstg:
+      - Information Gathering
+      - Fingerprint Web Application
+      - Identify Application Entry Points
+      - Map Application Architecture
+    top_10:
+      - A05 Security Misconfiguration
+      - A06 Vulnerable and Outdated Components
+
+  first_csirt:
+    - Information Security Event Management
+    - Information Security Incident Management
+    - Situational Awareness
+
+severity: medium
+confidence: medium
+
+tags:
+  - waf
+  - oci
+  - reconnaissance
+  - path-enumeration
+  - sentinel
