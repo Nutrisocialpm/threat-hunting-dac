@@ -1,0 +1,38 @@
+# Sensitive data
+.env
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.cer
+secrets.*
+credentials.*
+tokens.*
+
+# Logs and raw evidence
+*.log
+*.evtx
+*.pcap
+*.pcapng
+*.csv
+*.xlsx
+*.zip
+*.7z
+*.rar
+
+# Raw evidence should not be committed
+evidence/raw/
+clients/*/evidence/raw/
+tests/raw-logs/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
