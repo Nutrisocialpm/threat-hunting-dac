@@ -1,0 +1,44 @@
+title: Possible Web Path Enumeration
+id: 00000000-0000-4000-8000-ucwaf0010001
+status: experimental
+description: Detects possible web path enumeration or active scanning behavior against web applications.
+author: Alexa
+date: 2026-06-29
+logsource:
+  category: webserver
+detection:
+  selection_status:
+    http.response.status_code:
+      - 400
+      - 401
+      - 403
+      - 404
+      - 405
+  selection_paths:
+    url.path|contains:
+      - ".env"
+      - ".git"
+      - "admin"
+      - "login"
+      - "swagger"
+      - "openapi"
+      - "api-docs"
+      - "graphql"
+      - "debug"
+      - "status"
+  condition: selection_status and selection_paths
+fields:
+  - source.ip
+  - destination.domain
+  - url.path
+  - http.response.status_code
+  - user_agent.original
+falsepositives:
+  - Authorized vulnerability scanners
+  - Synthetic monitoring
+  - QA testing
+  - Authorized penetration testing
+level: medium
+tags:
+  - attack.reconnaissance
+  - attack.t1595
